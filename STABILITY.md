@@ -312,6 +312,107 @@ the Action tag) for reproducible CI.
 
 ---
 
+<a id="grant-direction-820"></a>
+
+## Migration Note: Unreleased — changed grants are not automatically widenings (#820)
+
+Host-grants `0.7` and contract 41 are extended in place. The issue originally
+named unreleased `0.6`/40; those shipped in 1.1.0 and remain frozen. No field,
+schema discriminator, check ID or severity changes here.
+
+Previously every added or changed MCP server, loaded hook, plugin, permission
+mode or sandbox setting emitted an expansion signal. A guard added to a hook,
+an MCP `--read-only` argument, disabling a plugin, changing `bypassPermissions`
+to `default`, and enabling the sandbox therefore all got widening markers.
+Now only a documented gain does:
+
+- A new MCP server or a new loaded hook. That includes a hook whose declaration
+  gains established loading from a previously declared-only or selected
+  plugin, and one more handler on an event that already had one: hook grants
+  are one per event, so that added hook is a `changed` grant whose #819
+  handler count grows. Other command, matcher, timeout, package, argument and
+  endpoint changes remain visible using #819's fields. They establish neither
+  widening nor narrowing.
+- A plugin or app enabled when newly declared, or where it was disabled or its
+  enablement was not established. Codex documents `apps.<id>.enabled` as
+  defaulting to `true`, so an app table without the key is enabled. A Claude
+  Code marketplace added to or re-pointed in `extraKnownMarketplaces` still
+  expands, as #720 shipped: the enabled plugins install from it. Disabling a
+  plugin, adding it disabled, or changing an already-enabled app's other
+  configuration establishes no gain. Non-boolean Claude Code enablement is now
+  unknown (`enabled: null`), not coerced to true. The nullable field and
+  configuration digest already exist.
+- A documented less restrictive Claude Code mode. `default`, `dontAsk` and
+  `plan` can widen to modes that permit more actions; `bypassPermissions` can
+  widen from the other known modes. `auto` and `acceptEdits` are not ordered
+  against each other. A newly declared `acceptEdits`, `auto` or
+  `bypassPermissions` is explicitly permissive; a newly declared `default`,
+  `dontAsk` or `plan` is not an expansion.
+- A new named project MCP approval or an explicit switch enabling all project
+  MCP servers or skipping the bypass-mode confirmation. Disabling those
+  switches does not expand. These are typed booleans, not string lookalikes.
+- Loosening a documented sandbox control. For Claude Code: disabling the
+  sandbox, permitting unsandboxed commands, `autoAllowBashIfSandboxed: true`,
+  `enableWeakerNestedSandbox: true`, a new `excludedCommands` entry, or a new
+  `network.allowedDomains` entry (including `*`). For VS Code `mcp.json`:
+  disabling a stdio server's sandbox, or a new `sandbox.network.allowedDomains`
+  entry. For Codex: known sandbox modes are ordered `read-only` <
+  `workspace-write` < `danger-full-access`, and adding explicit full access or
+  widening that order expands; so do enabling `workspace-write` networking,
+  keeping `/tmp` or `$TMPDIR` writable, a new `writable_roots` entry, and a
+  `web_search` mode ordered `disabled` < `cached` < `indexed` < `live` that
+  rises, or `live` declared anew.
+
+A replaced value that is absent, ambiguous (several values of the setting left)
+or not a documented value is not a host default: the arrival is read as a new
+declaration, so a typo, an undocumented mode such as `delegate`, or two
+predecessors cannot hide `bypassPermissions` or `danger-full-access` arriving.
+
+The rules follow the hosts' [permission-mode](https://code.claude.com/docs/en/permissions#permission-modes),
+[settings](https://code.claude.com/docs/en/settings),
+[sandboxing](https://code.claude.com/docs/en/sandboxing),
+[VS Code MCP sandbox](https://code.visualstudio.com/docs/agents/reference/mcp-configuration#sandbox-configuration), and
+[Codex configuration](https://learn.chatgpt.com/docs/config-file/config-reference)
+references. They compare declared facts, not runtime behavior or effective
+session defaults. In particular Codex `approval_policy: never` is not treated
+as bypassing its sandbox. Removing a setting does not invent its replacement.
+
+**An edit whose direction is not established is named, not silent.** A
+same-identity MCP or loaded-hook edit with no gain, a plugin or app whose
+enablement is not established, and an added setting value no rule above orders
+(Codex `approval_policy`, a Cursor `cli.json` setting, `disableAllHooks`,
+`acceptEdits` ↔ `auto`, a string lookalike, and so on) is a row with
+`expands: false` whose `why` ends `authority direction is unknown`. The Claude
+Code Stop hook announces those rows once, under their own heading, beside the
+widenings it already announced. A settled tightening (a disabled plugin, a
+more restrictive mode, an enabled sandbox, a smaller list) and an edit to a
+hook nothing loads (#714) stay quiet.
+
+`mcp_server_changed` is no longer emitted for arbitrary server edits.
+`hook_changed` requires a gain in established loading or declared handlers. The existing
+`plugin_or_app_*`, `permission_mode_*`, and `sandbox_*` strings remain, but
+only for the gains above. A same-identity edit with no gain is `changed` with
+`expands: false`.
+Settings whose identity includes their value keep their removed/added rows.
+Each arrival is evaluated against its own host, source and setting, so a
+tightening cannot inherit another setting's widening marker in the same file.
+
+Three reader corrections re-read unchanged files differently, so a baseline
+saved before this change can show a `changed` row without a new expansion
+signal after upgrading: a Claude Code non-boolean `enabledPlugins` value
+publishes `enabled: null` instead of `true`, a Codex app without `enabled`
+publishes `true` instead of `null`, and a VS Code `sandboxEnabled: false` on a
+server whose stdio transport is not established publishes `access: unknown`
+instead of `admin`. Save the baseline again to clear them.
+
+`diff`, verifier host comparisons, PR comments, `check` rows, drift and
+preflight use the same expansion evidence. **Check decisions are unchanged:**
+the existing rules still review hook/MCP edits and permission settings at their
+documented severity, even when direction is unknown or tightening. A widening
+marker is not the control signal, and removing one grants no merge authority.
+The [direction benchmark](benchmark/host-config/direction-replay-820.md) records
+before/after counts separately from the historical row-presence scores.
+
 <a id="exec-equivalent-permissions-824"></a>
 
 ## Migration Note: Unreleased — arbitrary-code launcher allow rules (#824)
