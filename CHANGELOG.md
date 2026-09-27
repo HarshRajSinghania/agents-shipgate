@@ -23,6 +23,9 @@
 
 ### Changes
 
+- The PR-comment fallback uses separated Markdown paragraphs and headings,
+  so fork reviews render correctly in the job summary after a 403 or 404.
+  Successful comment updates and error handling are unchanged. (#856)
 - Host-only Action summaries no longer invent empty scan status or zero scan
   severity counts. Artifact links name only existing files, and annotation
   metadata omits `source_report` when no scan report was produced. (#854)
