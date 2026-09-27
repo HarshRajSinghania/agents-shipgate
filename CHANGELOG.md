@@ -23,6 +23,9 @@
 
 ### Changes
 
+- Host-only Action summaries no longer invent empty scan status or zero scan
+  severity counts. Artifact links name only existing files, and annotation
+  metadata omits `source_report` when no scan report was produced. (#854)
 - Workflow comparison values label their aggregate access (for example,
   `access: write`) so it is not mistaken for an individual token scope.
   Direction, severity, explanation and widening signals are unchanged. (#859)
