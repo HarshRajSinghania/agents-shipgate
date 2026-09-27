@@ -23,6 +23,7 @@
 
 ### Changes
 
+- Rate documented arbitrary-code Bash launcher prefixes with trailing wildcards as critical/admin, and any Bash allow rule the lattice decides is wider than one (`Bash(python3 *)`, `Bash(npx*)`), so widening a rule cannot lower its rating; route newly granted forms through the existing wildcard block check, and count them in the `audit --host` Markdown warning. Show them in check evidence in table text only; exact commands and containment comparisons stay unchanged. `check` no longer reports respelling a Bash rule (`Bash(npx:*)` to `Bash(npx *)`) as a new grant (#824).
 - Skill frontmatter `metadata` no longer refuses the entire host comparison. A map's boolean, numeric, list and nested values are preserved, and a `metadata` that is not a map, which Claude Code drops, is digested as written, as an undocumented key is (#730). Claude Code documents a free-form map; this static structure reader does not validate portability to hosts that require string values. Metadata changes remain in the structure digest, and malformed frontmatter, ambiguous YAML and a metadata key that is not a string, at any depth, still refuse. A permission widening beside such metadata is now visible in text and JSON, with matching coverage. See the [migration note](STABILITY.md#skill-metadata-848). (#848)
 - Version-based Action installs log the existing installed engine content
   digest, including host-only runs. It can be compared with a local verifier's
