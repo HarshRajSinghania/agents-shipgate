@@ -23,6 +23,12 @@
 
 ### Changes
 
+- Version-based Action installs log the existing installed engine content
+  digest, including host-only runs. It can be compared with a local verifier's
+  `engine_distribution_sha256`; it is not the wheel ZIP hash. An engine that
+  cannot compute it, such as any release before `1.0.0`, logs a warning and
+  the install continues. The explicit wheel-and-hash install route is
+  unchanged. (#855)
 - The PR-comment fallback uses separated Markdown paragraphs and headings,
   so fork reviews render correctly in the job summary after a 403 or 404.
   Successful comment updates and error handling are unchanged. (#856)
