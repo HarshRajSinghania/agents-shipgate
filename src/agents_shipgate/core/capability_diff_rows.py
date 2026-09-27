@@ -53,6 +53,7 @@ from agents_shipgate.core.permission_lattice import (
     permission_pairing_group,
     subsumes,
 )
+from agents_shipgate.core.permission_residual import residual_prefix_note
 from agents_shipgate.schemas.capability_diff import CapabilityDiffRow as CapabilityDiffRow
 
 ABSENT = "—"
@@ -1372,7 +1373,8 @@ def _link_rows(
 
 
 def capability_diff_rows(
-    payload: dict[str, Any], *, redact_permission_arguments: bool = False
+    payload: dict[str, Any], *, redact_permission_arguments: bool = False,
+    current_grants: Sequence[dict[str, Any]] = (),
 ) -> list[CapabilityDiffRow]:
     """Every typed grant change in ``payload``, one row each."""
 
@@ -1460,6 +1462,15 @@ def capability_diff_rows(
         ):
             # Wording only: ambiguity still forbids a pair or signal suppression.
             why = "removes this allow rule; another added allow rule still covers its matches"
+        # The examples spell out the rule's prefix, which a route that
+        # redacts rule arguments must not print beside the redacted rule.
+        note = (
+            None
+            if redact_permission_arguments
+            else residual_prefix_note(after_grant, current_grants)
+        )
+        if note:
+            why = f"{why}; {note}"
         row = CapabilityDiffRow(
             subject=_subject(grant),
             before=_grant_value(
