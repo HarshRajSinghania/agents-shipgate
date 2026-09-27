@@ -23,6 +23,9 @@
 
 ### Changes
 
+- Workflow comparison values label their aggregate access (for example,
+  `access: write`) so it is not mistaken for an individual token scope.
+  Direction, severity, explanation and widening signals are unchanged. (#859)
 - Host-only verifier headlines and `control.reason` label their raw count as
   rows, so a two-row replacement no longer contradicts the review summary
   that correctly calls it one change. Partial comparisons use the same

@@ -301,6 +301,18 @@ the Action tag) for reproducible CI.
 
 ---
 
+<a id="workflow-access-label-859"></a>
+
+## Migration Note: Unreleased — workflow values label aggregate access (#859)
+
+Workflow row `before` and `after` values now begin with `access: read`,
+`access: write` or the other recorded access value, instead of an unlabelled
+word. Individual token scopes still follow with their job and scope names.
+The same row projection feeds diff text/JSON, verifier comparisons and check.
+This is a display-value change only: direction, severity, `why`, `expands`,
+control and grant evidence are unchanged. Historical artifacts retain their
+published values; no schema changes.
+
 <a id="host-control-row-count-857"></a>
 
 ## Migration Note: Unreleased — host control reasons count rows explicitly (#857)
