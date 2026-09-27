@@ -23,6 +23,7 @@
 
 ### Changes
 
+- Note a literal, unconditional inline `PreToolUse` allow on a broad Claude Code hook matcher. Diff, verifier host comparison and PR comments share the note; script and unsupported command behavior remains a named inventory limit. Direction, severity, widening signals and control decisions are unchanged. See the [bounded grammar](docs/engineering/inline-hook-allow-notes.md). (#826)
 - Add factual mutable-source notes to supported MCP launcher changes, including established pinned-to-mutable transitions. Keep package text within existing redaction rules; do not change direction, severity or control decisions (#825).
 - Add conditional review guidance for supported Claude Code shell-permission changes: a concrete intent question, human choices and a declaration comparison target, shared by CLI, maintained JSON and advisory PR output. Conflicting, redacted or incomplete evidence withholds specific choices. Existing control permissions, rows and release decisions are unchanged. See the [case mapping](docs/engineering/permission-review-guidance.md). (#839)
 

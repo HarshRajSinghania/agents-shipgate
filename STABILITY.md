@@ -728,6 +728,23 @@ command, verdict, reader, row or control state is added.
 
 **Compatibility.** `coverage` and its items are closed objects, so a reader validating against the published [`docs/verifier-schema.v0.20.json`](docs/verifier-schema.v0.20.json) rejects a `0.21` artifact's new members; that schema stays frozen. The current reader reads a `0.20` artifact as `0.21` with `unread_candidates: null`, which is what that build knew, and refuses one that claims a `changed_not_read` item, a `candidate`, `read_sources_only: false` or either `unread_candidates` member. A `diff --json` consumer sees `capability_diff_schema_version: "0.4"`. A consumer switching on `coverage.items[].status` should treat an unknown status as a change it must read, not as no change.
 
+<a id="inline-hook-allow-826"></a>
+
+## Migration Note: Unreleased — unconditional inline hook approvals (host-grants `0.7`, contract v41, #826)
+
+Host inventory `0.7` and runtime contract `41` are extended in place with two
+optional, display-only members of a hook handler, published only on a Claude
+Code `PreToolUse` handler, the one the reader examines: `inline_allow`, and
+`decision_limit` (`script_or_command_behavior_not_read`) when the command is
+outside the [bounded grammar](docs/engineering/inline-hook-allow-notes.md). A
+handler of any other event or host publishes neither, so an absent member means
+not examined, never read without a limit. A supported literal, unconditional
+`PreToolUse` allow on a broad matcher adds an explanation to a current Claude
+Code hook row's `why`. These members are left out of saved baselines, grant
+equality and the inventory digests, and do not change direction, severity,
+widening signals, check IDs or control decisions. Released schemas are
+unchanged.
+
 <a id="hook-mcp-detail-fields-819"></a>
 
 ## Migration Note: Unreleased — hook matcher, command and timeout, and MCP launch arguments (host-grants `0.7`, contract v41, #819)
