@@ -23,6 +23,10 @@
 
 ### Changes
 
+- Host-only verifier headlines and `control.reason` label their raw count as
+  rows, so a two-row replacement no longer contradicts the review summary
+  that correctly calls it one change. Partial comparisons use the same
+  wording; decisions and control routes are unchanged. (#857)
 - An unrelated permission rule for another tool no longer splits a decided
   replacement into separate review changes. Adding `Read(src/**)` beside
   `Bash(npm test *)` → `Bash(npm *)` preserves the paired widening on the
