@@ -49,8 +49,8 @@ either.
 Pick one channel and stay on it for the whole walkthrough. **Every command in
 [One review, end to end](#one-review-end-to-end) runs on the published
 release, and reaches the same verdict there** — `blocked`, `can merge without
-human: false`, exit `0`. The excerpts below are from a source checkout, and the
-published release renders the same lines —
+human: false`, exit `0`. The verdict excerpts in that walkthrough are from a source checkout, and the
+published release renders those same lines —
 a test fails if a step quotes output only one channel produces without saying
 which.
 
@@ -127,8 +127,11 @@ as data.
 
 **Source-tree examples, not yet released:** the published `1.1.0` prints these
 comparison facts and coverage, but does not append the conditional permission
-review guidance shown in the change example. The source tree still reports
-version `1.1.0`; its version string alone is not published-wheel provenance. On
+review guidance shown in the change example, nor the `launch source is mutable`
+note on the added MCP server. That note identifies its unversioned `npx` package
+and changes neither severity nor the widening count. The source tree still
+reports version `1.1.0`; its version string alone is not published-wheel
+provenance. On
 the remote's `main`, `.claude/settings.json` allows `Bash(npm test:*)` and denies `Bash(rm -rf:*)`,
 and `.mcp.json` configures one server, `docs`. The PR branch allows
 `Bash(npm *)`, drops the denial, and adds a `billing` server.
@@ -157,7 +160,7 @@ Agent capability diff  origin/main (7063f900) -> working tree
 
 ⚠ high    added    claude-code .mcp.json
                   billing (command name npx; env keys BILLING_TOKEN)
-                  an MCP tool surface the agent may call has changed
+                  an MCP tool surface the agent may call has changed; launch source is mutable
 
 ⚠ medium  widened  claude-code .claude/settings.json
                   allow: Bash(npm test:*) → allow: Bash(npm *)

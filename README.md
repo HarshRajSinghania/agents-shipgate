@@ -63,16 +63,16 @@ entry per changed grant or replaced rule. If the PR targets another branch, pass
 `--base upstream/<pr-base>`. On a PR that widens a Claude Code allow rule,
 drops a denial and adds an MCP server:
 
-The example below is from this source tree. Its conditional review guidance is
-**not yet released**; the published `1.1.0` prints the same comparison without
-that guidance section.
+The example below is from this source tree. Its conditional review guidance and
+its `launch source is mutable` note are **not yet released**; the published
+`1.1.0` prints the same comparison without that guidance section or note.
 
 ```text
 Agent capability diff  origin/main (7063f900) -> working tree
 
 ⚠ high    added    claude-code .mcp.json
                   billing (command name npx; env keys BILLING_TOKEN)
-                  an MCP tool surface the agent may call has changed
+                  an MCP tool surface the agent may call has changed; launch source is mutable
 
 ⚠ medium  widened  claude-code .claude/settings.json
                   allow: Bash(npm test:*) → allow: Bash(npm *)
@@ -155,8 +155,11 @@ beside the refusal. The
 answer, the `--base <ref>` recovery when no base can be detected, and the
 [surfaces `diff` does not read](docs/host-boundary-support.md#known-unread-surfaces).
 Supported shell changes then add conditional human choices. They establish no
-intent or runtime access and grant no authority. The source tree still reports
-version `1.1.0`; that version string does not make this a published-wheel capture.
+intent or runtime access and grant no authority. The `launch source is mutable`
+note identifies the unversioned `npx` package declared by the added server; it
+changes neither the row's severity nor the widening count. The source tree still
+reports version `1.1.0`; that version string does not make this a published-wheel
+capture.
 
 When the answer is useful and you want it on every pull request, add
 [`examples/github-actions/14-host-only-advisory-pr.yml`](examples/github-actions/14-host-only-advisory-pr.yml):
