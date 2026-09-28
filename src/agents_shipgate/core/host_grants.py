@@ -37,6 +37,11 @@ from agents_shipgate.core.boundary_registry import (
     is_explicit_boundary_file_path,
     is_hook_declaration_file_name,
 )
+from agents_shipgate.core.hook_script_capture import capture_hook_script
+from agents_shipgate.core.hook_script_reference import (
+    MAX_HOOK_SCRIPT_HANDLERS,
+    hook_script_reference,
+)
 from agents_shipgate.core.host_boundary import (
     _is_wildcard_allow,
     _is_write,
@@ -151,6 +156,9 @@ class HostStaticParseCache:
 
     max_entries: int = MAX_HOST_STATIC_ENTRIES
     max_total_bytes: int = MAX_HOST_STATIC_TOTAL_BYTES
+    reference_workspace: Path | None = None
+    hook_script_reads: dict[str, dict[str, Any]] = field(default_factory=dict)
+    hook_script_absences: set[str] = field(default_factory=set)
     _reads: dict[tuple[str, str], tuple[str | None, str | None]] = field(
         default_factory=dict
     )
@@ -378,9 +386,9 @@ class HostBoundarySnapshot:
 
 @dataclass(frozen=True)
 class EnabledPluginHookFiles:
-    """The files holding hooks of a plugin the project settings enable (#809).
+    """Selected plugin hook declarations and host executable references.
 
-    The two private snapshot facts, gathered across the sides of a change a
+    Private snapshot facts, gathered across the sides of a change a
     caller could read, so `check` and `verify` decide from the same evidence.
     """
 
@@ -390,17 +398,28 @@ class EnabledPluginHookFiles:
     #: Files such a plugin selects whose hooks the reader did not read
     #: (``HostBoundarySnapshot.enabled_plugin_unread_hook_files``).
     unread: frozenset[str] = frozenset()
+    #: Selected literal executable references, identified separately per host.
+    scripts: frozenset[tuple[str, str]] = frozenset()
 
     @classmethod
     def of(cls, snapshot: HostBoundarySnapshot) -> EnabledPluginHookFiles:
         return cls(
             sources=snapshot.enabled_plugin_hook_sources,
             unread=snapshot.enabled_plugin_unread_hook_files,
+            scripts=frozenset(
+                (grant["host"], entry["path"])
+                for grant in snapshot.inventory["grants"]
+                if grant.get("kind") == "hook"
+                and hook_loading_basis(grant) in {"host_configuration", "project_enabled_plugin"}
+                for entry in grant.get("script_inputs") or []
+                if entry.get("path") and entry.get("basis")
+            ),
         )
 
     def union(self, other: EnabledPluginHookFiles) -> EnabledPluginHookFiles:
         return EnabledPluginHookFiles(
-            sources=self.sources | other.sources, unread=self.unread | other.unread
+            sources=self.sources | other.sources, unread=self.unread | other.unread,
+            scripts=self.scripts | other.scripts,
         )
 
 
@@ -3787,7 +3806,9 @@ def _collect_file(
     artifacts: list[dict[str, Any]], grants: list[dict[str, Any]], issues: list[dict[str, Any]],
     resolved_through: tuple[str, ...] = (),
     hook_basis: HookLoadingBasis = "host_configuration",
+    plugin_root: str | None = None,
 ) -> Any:
+    first_grant = len(grants)
     if kind == "instructions":
         text, error = cache.read(path, containment_root=containment_root)
         if error:
@@ -3909,7 +3930,117 @@ def _collect_file(
         grants.extend(_claude_grants(data, scope=scope, source=source))
     elif host == "cursor":
         grants.extend(_cursor_grants(data, scope=scope, source=source))
+    _bind_hook_scripts(
+        data=data, grants=grants[first_grant:], root=containment_root,
+        cache=cache, issues=issues, artifacts=artifacts, plugin_root=plugin_root,
+    )
     return data
+
+
+def _bind_hook_scripts(
+    *, data: Any, grants: list[dict[str, Any]], root: Path,
+    cache: HostStaticParseCache, issues: list[dict[str, Any]],
+    artifacts: list[dict[str, Any]],
+    plugin_root: str | None = None,
+) -> None:
+    """Attach bounded direct dependencies to selected repository hook grants.
+
+    A limit on a selected dependency is a blocking ``unreadable`` issue on the
+    dependency's own path, once per host and path, so a comparison can prove
+    it unchanged or withhold that script alone (#702 review). A malformed
+    group is skipped with a non-blocking issue naming it: the groups after it
+    still select their handlers.
+    """
+    hooks = data.get("hooks") if isinstance(data, dict) else None
+    if not isinstance(hooks, dict):
+        return
+    for grant in grants:
+        if grant.get("kind") != "hook" or grant.get("scope") != "repository":
+            continue
+        event = grant["event"]
+        groups = hooks.get(event)
+        entries: list[dict[str, Any]] = []
+        grant["script_inputs"] = entries
+        selected = hook_loading_basis(grant) in LOADED_HOOK_BASES
+        malformed: list[str] = []
+        if not isinstance(groups, list):
+            entries.append({"handler": 0, "limit": "unsupported_hook_shape"})
+            malformed.append("value")
+            groups = []
+        index = 0
+        for position, group in enumerate(groups):
+            handlers = group.get("hooks") if isinstance(group, dict) else None
+            if not isinstance(handlers, list):
+                entries.append({"handler": index, "limit": "unsupported_hook_shape"})
+                malformed.append(f"group {position}")
+                continue
+            for handler in handlers:
+                if index >= MAX_HOOK_SCRIPT_HANDLERS:
+                    entries.append({"handler": index, "limit": "handler_bound_exceeded"})
+                    break
+                ordinal = index
+                index += 1
+                if not isinstance(handler, dict) or handler.get("type") != "command":
+                    continue
+                if not selected:
+                    entries.append({"handler": ordinal, "limit": "hook_selection_not_established"})
+                    continue
+                ref = hook_script_reference(
+                    handler, host=grant["host"],
+                    workspace_path=str(cache.reference_workspace or root), plugin_root=plugin_root,
+                )
+                entry: dict[str, Any] = {"handler": ordinal, "path": ref.path, "basis": ref.basis, "limit": ref.limit}
+                if ref.path is not None:
+                    shown = public_host_path(ref.path)
+                    if shown != ref.path:
+                        entry.update(path=shown, limit="redacted_dependency_path")
+                    else:
+                        if ref.path not in cache.hook_script_reads:
+                            cache.hook_script_reads[ref.path] = capture_hook_script(
+                                cache.reader_for(root), ref.path, absent_paths=cache.hook_script_absences,
+                            )
+                        entry.update(cache.hook_script_reads[ref.path])
+                    if entry.get("limit"):
+                        issue = _inventory_issue(
+                            kind="unreadable", host=grant["host"], source=shown,
+                            message=(
+                                f"Selected hook script {shown}: {entry['limit']}; its bytes were "
+                                f"not compared (hook {event} in {grant['source']})."
+                            ),
+                            blocking=True,
+                        )
+                        if not any(
+                            (item["kind"], item["host"], item["source"])
+                            == (issue["kind"], issue["host"], issue["source"])
+                            for item in issues
+                        ):
+                            issues.append(issue)
+                    if not any(item["host"] == grant["host"] and item["path"] == shown and item["kind"] == "hook_script" for item in artifacts):
+                        artifacts.append(_artifact(
+                            host=grant["host"], scope="repository", source=shown, kind="hook_script",
+                            status="failed" if entry.get("limit") else "parsed",
+                            data={"sha256": entry.get("sha256"), "size_bytes": entry.get("size_bytes")},
+                        ))
+                entries.append(entry)
+            if entries and entries[-1].get("limit") == "handler_bound_exceeded":
+                break
+        if selected and malformed:
+            issues.append(_inventory_issue(
+                kind="unsupported", host=grant["host"], source=grant["source"],
+                message=(
+                    f"Hook {event} {', '.join(malformed[:3])}"
+                    + (f" and {len(malformed) - 3} more" if len(malformed) > 3 else "")
+                    + " is not a matcher group holding a hooks list, so its handlers were "
+                    "not examined for script dependencies."
+                ),
+                blocking=False,
+            ))
+        if selected and any(entry.get("limit") == "handler_bound_exceeded" for entry in entries):
+            issues.append(_inventory_issue(
+                kind="unsupported", host=grant["host"], source=grant["source"],
+                message=f"Hook {event} executable dependencies were not fully examined: handler bound {MAX_HOOK_SCRIPT_HANDLERS} exceeded.",
+                blocking=True,
+            ))
 
 
 def _claude_plugin_hook_issue(*, source: str, message: str, blocking: bool) -> dict[str, Any]:
@@ -4361,10 +4492,15 @@ def _resolve_claude_plugin_hooks(
         enabled_here = plugin_root.casefold() in enabled_roots
         if enabled_here:
             result.enabled_inline.add(selector.split("#", 1)[0])
-        grants.extend(_hooks_grants(
+        inline_grants = _hooks_grants(
             {"hooks": declared}, host="claude-code", scope="repository", source=selector,
             basis="project_enabled_plugin" if enabled_here else "plugin_selected",
-        ))
+        )
+        _bind_hook_scripts(
+            data={"hooks": declared}, grants=inline_grants, root=root,
+            cache=cache, issues=issues, artifacts=artifacts, plugin_root=plugin_root,
+        )
+        grants.extend(inline_grants)
     result.enabled = {
         hook_file for hook_file, roots in roots_by_file.items() if roots & enabled_roots
     }
@@ -5018,6 +5154,8 @@ def build_host_boundary_snapshot(
     root = workspace.resolve()
     home = Path.home().resolve()
     cache = cache or HostStaticParseCache()
+    if cache.reference_workspace is None:
+        cache.reference_workspace = root
     artifacts: list[dict[str, Any]] = []
     grants: list[dict[str, Any]] = []
     issues: list[dict[str, Any]] = []
@@ -5106,6 +5244,7 @@ def build_host_boundary_snapshot(
             containment_root=root, cache=cache,
             artifacts=artifacts, grants=grants, issues=issues,
             resolved_through=resolved_through, hook_basis=hook_basis,
+            plugin_root=(next(iter(selection.roots[source])) if len(selection.roots.get(source, ())) == 1 else None),
         )
         if hook_basis in {"plugin_selected", "project_enabled_plugin"}:
             note_unusable_selected_hooks(data, source=source)
@@ -5120,6 +5259,7 @@ def build_host_boundary_snapshot(
             hook_basis=(
                 "project_enabled_plugin" if source in selection.enabled else "plugin_selected"
             ),
+            plugin_root=(next(iter(selection.roots[source])) if len(selection.roots.get(source, ())) == 1 else None),
         )
         # Read only because a plugin selects it, so its read limits are
         # plugin-reference limits. A registered hook path above keeps the
@@ -5324,6 +5464,96 @@ def without_host_sources(
         **inventory,
         "artifacts": artifacts,
         "grants": [item for item in inventory.get("grants") or [] if kept(item.get("source"))],
+        "issues": issues,
+        "host_coverage": _coverage(
+            scope=inventory.get("scope", "repository"), artifacts=artifacts, issues=issues
+        ),
+    }
+
+
+def hook_dependency_limits(inventory: dict[str, Any]) -> dict[tuple[str, str], str]:
+    """Each selected hook script whose bytes were not read, as ``{(host, path): limit}`` (#702).
+
+    Read from the ``script_inputs`` the grants publish: only an established
+    reference (a path and its basis) the reader then could not capture.
+    """
+
+    return {
+        (str(grant["host"]), str(entry["path"])): str(entry["limit"])
+        for grant in inventory.get("grants", [])
+        if grant.get("kind") == "hook"
+        for entry in grant.get("script_inputs") or []
+        if entry.get("path") and entry.get("basis") and entry.get("limit")
+    }
+
+
+def hook_dependency_issues(inventory: dict[str, Any]) -> dict[str, tuple[str, str]]:
+    """The blocking issues that are a selected hook script's limit, as ``{issue id: (host, path)}``.
+
+    An issue qualifies only when nothing else this inventory publishes at its
+    path could have raised it: a path that is also a declaration the reader
+    parses keeps its issue as that declaration's.
+    """
+
+    limits = hook_dependency_limits(inventory)
+    labels = {(host, _issue_source_label(path)): (host, path) for host, path in limits}
+    declared = {
+        (str(artifact["host"]), str(artifact["path"]))
+        for artifact in inventory.get("artifacts", [])
+        if artifact.get("kind") != "hook_script"
+    }
+    found: dict[str, tuple[str, str]] = {}
+    for issue in inventory.get("issues", []):
+        key = labels.get((str(issue.get("host")), str(issue.get("source"))))
+        if issue.get("blocking") and issue.get("kind") == "unreadable" and key and key not in declared:
+            found[str(issue["issue_id"])] = key
+    return found
+
+
+def without_hook_dependency_bytes(
+    inventory: dict[str, Any],
+    *,
+    issue_ids: set[str] | frozenset[str],
+    dependencies: set[tuple[str, str]] | frozenset[tuple[str, str]],
+) -> dict[str, Any]:
+    """The inventory with these hook scripts' bytes left uncompared (#702 review).
+
+    For a comparison that withholds one selected script rather than the whole
+    comparison: its limit issues and ``hook_script`` artifacts are dropped,
+    each hook entry naming it keeps its handler, path and basis but no digest,
+    size or limit, and host coverage is recomputed as the reader derives it.
+    The declaring hook is still compared, so a repointed reference is a row.
+    """
+
+    def withheld(host: object, path: object) -> bool:
+        return (str(host), str(path)) in dependencies
+
+    grants = []
+    for grant in inventory.get("grants") or []:
+        entries = grant.get("script_inputs")
+        if grant.get("kind") == "hook" and entries and any(
+            withheld(grant.get("host"), entry.get("path")) for entry in entries
+        ):
+            grant = {
+                **grant,
+                "script_inputs": [
+                    {**entry, "sha256": None, "size_bytes": None, "limit": None}
+                    if withheld(grant.get("host"), entry.get("path"))
+                    else entry
+                    for entry in entries
+                ],
+            }
+        grants.append(grant)
+    issues = [item for item in inventory.get("issues", []) if item.get("issue_id") not in issue_ids]
+    artifacts = [
+        item
+        for item in inventory.get("artifacts") or []
+        if not (item.get("kind") == "hook_script" and withheld(item.get("host"), item.get("path")))
+    ]
+    return {
+        **inventory,
+        "artifacts": artifacts,
+        "grants": grants,
         "issues": issues,
         "host_coverage": _coverage(
             scope=inventory.get("scope", "repository"), artifacts=artifacts, issues=issues
@@ -5660,6 +5890,17 @@ def compared_grant(grant: dict[str, Any] | None) -> dict[str, Any] | None:
     if not hidden or not hidden.intersection(grant):
         return grant
     return {key: value for key, value in grant.items() if key not in hidden}
+
+
+def hook_dependency_only_change(before: dict | None, after: dict | None) -> bool:
+    """Script bytes are compared evidence, never newly granted authority."""
+    if not before or not after or before.get("kind") != "hook" or after.get("kind") != "hook":
+        return False
+    return (
+        before.get("script_inputs") != after.get("script_inputs")
+        and {k: v for k, v in compared_grant(before).items() if k != "script_inputs"}
+        == {k: v for k, v in compared_grant(after).items() if k != "script_inputs"}
+    )
 
 
 def _same_workflow_grant(before: dict | None, after: dict | None) -> bool:
@@ -6300,6 +6541,21 @@ def build_host_drift_payload(
     *, baseline: dict[str, Any], inventory: dict[str, Any], baseline_file: str
 ) -> dict[str, Any]:
     reasons: list[str] = []
+    # A baseline from before #702 never read script bytes. Only a hook whose
+    # current reading binds a script cannot be compared against it; for every
+    # other hook the current entries hold limits alone and are left out.
+    unread_scripts = {
+        str(grant.get("grant_id"))
+        for grant in (baseline.get("inventory") or {}).get("grants", [])
+        if grant.get("kind") == "hook" and grant.get("scope") == "repository"
+        and grant.get("script_inputs") is None
+    }
+    if any(
+        str(grant.get("grant_id")) in unread_scripts
+        and any(entry.get("path") and entry.get("basis") for entry in grant.get("script_inputs") or [])
+        for grant in inventory.get("grants", [])
+    ):
+        reasons.append("baseline_hook_script_inputs_unavailable")
     if baseline.get("host_grants_schema_version") == "0.1":
         reasons.append("baseline_schema_v0.1_lacks_typed_grants_and_scope")
     elif baseline.get("host_grants_schema_version") not in _COMPARABLE_BASELINE_SCHEMA_VERSIONS:
@@ -6341,14 +6597,27 @@ def build_host_drift_payload(
         baseline_inventory=baseline["inventory"],
         inventory=inventory,
         baseline_file=baseline_file,
+        unread_scripts=unread_scripts,
     )
 
 
 def _comparable_drift_payload(
-    *, baseline_inventory: dict[str, Any], inventory: dict[str, Any], baseline_file: str
+    *, baseline_inventory: dict[str, Any], inventory: dict[str, Any], baseline_file: str,
+    unread_scripts: set[str] | frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     current = normalized_host_grants(inventory)
-    changes = diff_host_grants(baseline_inventory, current)
+    # Limit-only entries against a baseline that never read scripts: neither
+    # side establishes a script, so there is nothing to compare (#702).
+    compared = {
+        **current,
+        "grants": [
+            {key: value for key, value in grant.items() if key != "script_inputs"}
+            if str(grant.get("grant_id")) in unread_scripts
+            else grant
+            for grant in current["grants"]
+        ],
+    } if unread_scripts else current
+    changes = diff_host_grants(baseline_inventory, compared)
     artifact_changes = _diff_host_artifacts(baseline_inventory, current)
     coverage_changes = _diff_host_coverage(baseline_inventory, current)
     payload = {

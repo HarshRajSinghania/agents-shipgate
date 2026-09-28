@@ -1832,6 +1832,45 @@ def test_stop_hook_names_rows_of_unknown_direction_apart_from_widenings(
     assert "never a permission" in message
 
 
+def test_stop_hook_names_a_changed_hook_script_of_unknown_direction(tmp_path: Path) -> None:
+    """#702 with #820: only the bytes of the guard a hook runs changed. The row
+    names no direction, so the Stop hook lists it apart from widenings rather
+    than staying silent."""
+    from typer.testing import CliRunner
+
+    from agents_shipgate.cli.main import app
+
+    engine = tmp_path / "engine"
+    (engine / ".claude" / "hooks").mkdir(parents=True)
+    (engine / ".claude" / "settings.json").write_text(
+        json.dumps(_guard('"$CLAUDE_PROJECT_DIR"/.claude/hooks/guard.sh')), encoding="utf-8"
+    )
+    (engine / ".claude" / "hooks" / "guard.sh").write_text("#!/bin/sh\nexit 2\n", encoding="utf-8")
+    for args in (
+        ["init", "-q", "-b", "main"],
+        ["config", "user.email", "t@example.invalid"],
+        ["config", "user.name", "T"],
+        ["add", "-A"],
+        ["commit", "-qm", "base"],
+    ):
+        subprocess.run(["git", *args], cwd=engine, check=True, capture_output=True)
+    (engine / ".claude" / "hooks" / "guard.sh").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    diff = CliRunner().invoke(app, ["diff", "--workspace", str(engine), "--base", "main", "--json"])
+    assert diff.exit_code == 0, diff.output
+    payload = json.loads(diff.output)
+    [row] = payload["rows"]
+    assert row["expands"] is False and row["why"].startswith("selected script bytes changed:")
+
+    hook_root = tmp_path / "hook"
+    hook_root.mkdir()
+    _host_diff_workspace(hook_root)
+    result = _run_hook(hook_root, "verify", {}, diff_payload=json.dumps(payload))
+    assert result.returncode == 0, result.stderr
+    message = json.loads(result.stdout)["systemMessage"]
+    assert "their direction is not established" in message
+    assert "These rows widen what the agent can do" not in message
+
+
 def test_stop_hook_lists_widenings_and_unknown_directions_under_their_own_headings(tmp_path: Path) -> None:
     from agents_shipgate.core.capability_diff_rows import DIRECTION_UNKNOWN
 

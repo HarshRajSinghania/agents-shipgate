@@ -38,6 +38,7 @@ from agents_shipgate.core.host_grants import (
     agent_rule_gains,
     agent_rule_text,
     checkout_ref_key,
+    hook_dependency_only_change,
     hook_loading_basis,
     host_grant_direction_unknown,
     host_grant_expansion_signals,
@@ -1299,6 +1300,59 @@ def _handler_changes(before: list[dict[str, Any]], after: list[dict[str, Any]]) 
     return parts
 
 
+def _changed_hook_scripts(
+    before: dict[str, Any], after: dict[str, Any]
+) -> list[tuple[str, dict[str, Any], dict[str, Any]]]:
+    """Each selected script whose reading differs, with both readings, once per path (#702).
+
+    Only for a dependency-only change, whose declaration is identical on both
+    sides, so the entries pair by position: a malformed group's entry can
+    share a handler number with the handler after it.
+    """
+
+    changed: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
+    old, new = before.get("script_inputs") or [], after.get("script_inputs") or []
+    for index in range(max(len(old), len(new))):
+        left = old[index] if index < len(old) else {}
+        right = new[index] if index < len(new) else {}
+        if left != right:
+            path = published_workflow_label(
+                str(right.get("path") or left.get("path") or "unresolved path")
+            )
+            changed.setdefault(path, (left, right))
+    return [(path, left, right) for path, (left, right) in changed.items()]
+
+
+def hook_script_named_by(row: CapabilityDiffRow, path: str) -> bool:
+    """Whether a dependency-only hook row names this script as changed (#702).
+
+    The coverage text reads it, so a changed script whose change is on the
+    declaring hook's row is not described as a change no row shows.
+    """
+
+    if not row.why.startswith(_HOOK_SCRIPT_WHY):
+        return False
+    named = row.why.split(";", 1)[0][len(_HOOK_SCRIPT_WHY):].strip()
+    return path in named.split(", ")
+
+
+_HOOK_SCRIPT_WHY = "selected script bytes changed:"
+
+
+def _hook_dependency_change(before: dict[str, Any], after: dict[str, Any]) -> str:
+    def digest(item: dict[str, Any]) -> str:
+        return str(item.get("sha256") or item.get("limit") or "not read")[:64]
+
+    parts = [
+        f"script {path} bytes {digest(left)} → {digest(right)}"
+        for path, left, right in _changed_hook_scripts(before, after)
+    ]
+    shown = "; ".join(parts[:3])
+    if len(parts) > 3:
+        shown += f"; {len(parts) - 3} more dependency changes"
+    return shown
+
+
 def _hook_change(event: str, before: dict[str, Any], after: dict[str, Any]) -> str | None:
     """What differs between two readings of one hook event, in its published handlers (#819).
 
@@ -1320,6 +1374,8 @@ def _hook_change(event: str, before: dict[str, Any], after: dict[str, Any]) -> s
     it (#819 review, cycle 5).
     """
 
+    if hook_dependency_only_change(before, after):
+        return f"{event}: {_hook_dependency_change(before, after)}"
     if "handlers" not in before or "handlers" not in after:
         return None
     old, new = before["handlers"], after["handlers"]
@@ -1538,6 +1594,19 @@ def capability_diff_rows(
         ):
             # Wording only: ambiguity still forbids a pair or signal suppression.
             why = "removes this allow rule; another added allow rule still covers its matches"
+        if hook_dependency_only_change(before_grant, after_grant):
+            # The digests are the change cell (`_hook_change`); the why names
+            # the scripts once, so the text does not print them twice.
+            scripts = [path for path, _left, _right in _changed_hook_scripts(before_grant, after_grant)]
+            named = ", ".join(scripts[:3]) + (f", {len(scripts) - 3} more" if len(scripts) > 3 else "")
+            # A script the host runs changed: what that does to the agent's
+            # authority is not established, and it is not silent (#820).
+            why = (
+                f"{_HOOK_SCRIPT_WHY} {named}; "
+                f"declaration unchanged, selected by {hook_loading_basis(after_grant)}; "
+                "compares file bytes only, not permissions or runtime behavior; "
+                f"{DIRECTION_UNKNOWN}"
+            )
         # The examples spell out the rule's prefix, which a route that
         # redacts rule arguments must not print beside the redacted rule.
         note = (
