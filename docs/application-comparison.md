@@ -68,13 +68,121 @@ artifact from the existing host diff JSON and verifier receipt.
 - `not_established`: neither side established a supported application agent.
 - Exit 2: refs/materialization/input could not be read. This is not no change.
 
+Every OpenAI Agents SDK `Agent(...)` construction in a file the scope reads is
+either an observed agent or a named limit. An agent assigned to a plain name
+is identified by that name (`assistant = Agent(...)` is `assistant`), as
+before, so renaming its `name=` or moving it into a builder changes nothing.
+Only a variable name assigned in more than one function or class body — two
+builders' local `agent` — gives way to each agent's literal `name`, and a handoff to such a
+variable is named by the agent it holds. Any other construction is identified
+by its literal `name`: `return Agent(name="Quote", ...)` inside a factory
+function, `self.agent = Agent(name="Held", ...)`, an agent inline in a list,
+or `Agent("Positional")`. `Agent[Context](...)` is the same construction.
+
+What the reader cannot read is a named limit on the agent it concerns, so other
+agents' rows in the file stand:
+
+- one identity constructed at more than one site in a file with different
+  tools or handoffs (two `return Agent(name="Quote", ...)` branches, or a
+  literal `name` equal to another agent's variable) — the binding graph would
+  merge them, so which construction binds which tool is not established;
+  constructions that bind exactly the same tools and handoffs are one agent.
+  A tool every such construction binds identically is still a row of that
+  agent, beside the limit. The same holds for a Google ADK agent name: its
+  constructions are one agent only when each binds the same tool definitions
+  and handoffs and was read cleanly (no toolset, no `**`, no warning, no
+  unresolved or non-literal `sub_agents`), as `root_agent` and a builder
+  returning its twin do;
+- a construction with `**` keyword unpacking or positional arguments after its
+  name, which can carry `tools` or `handoffs`;
+- an agent whose `tools`, `handoffs` or `mcp_servers` are changed after
+  construction: assigned, extended or sliced (`agent.tools.append(...)`,
+  `agent.tools = [...]`, `agent.tools[:] = ...`), `setattr`/`delattr` by name,
+  or a handle taken on them (`t = agent.tools`) that is itself changed later —
+  a handle only read, like `len(request.tools)`, is nothing. The changed value is read in
+  the scope of the change (a change in place reaches every agent built from the
+  same list object): an agent the reader constructed — directly, through
+  `self.agent`, or through a module function that returns it — carries the
+  limit; a value proven not to be an agent (`Settings()`, a literal,
+  `type(...)()`, the instance's own `self.tools`) carries nothing; anything
+  else is a limit on the file;
+- a copy that passes its own `tools`, `handoffs` or `mcp_servers`
+  (`agent.clone(tools=...)`, `dataclasses.replace(agent, tools=...)`,
+  `copy.replace(...)`), wherever the original came from, unless the original
+  is proven not to be an agent. A copy passing only `**` is a limit only on a
+  value known to be an agent. A copy that passes none of them keeps the
+  original's tools, which the original's rows already compare, and is not a
+  limit;
+- an agent built from a subclass of the SDK's `Agent` defined in the same
+  module, whose tools arrive through its constructor, including one made with
+  `type("X", (Agent,), {})`.
+
+A construction whose `name` is not a literal is a limit on its file.
+
+A module that is not read as an SDK source is still read for what can change
+an agent without it: a capability-passing copy, and — once the module imports
+anything from the scope, or is a Google ADK source, whose reader does not
+follow a change after construction — a change to any object's tools, handoffs, MCP
+servers or sub-agents, reached by an alias, a loop, a parameter or a call's
+result as in an SDK file, unless the object is plainly not an agent (a literal,
+or an instance of a class the scope defines that is not an `Agent` subclass).
+A module that imports nothing from the scope has another library's `.tools`.
+In any module, importing an SDK `Agent` subclass from the scope — `from core
+import Assistant`, `core.Assistant` after `import core`, or through a package
+that re-exports it with `from app.core import *` — is a limit; a subclass
+nothing imports, a vendor class of the same name, or a name that only appears
+in a string is not. Each is a limit on the module where it appears. The scope's
+own package path counts as the scope (`from svc.app.x import …` under
+`--scope svc/app`).
+
+The Google ADK reader reads each `Agent(...)` / `LlmAgent(...)` call, not a
+subclass's constructor. A class deriving from an ADK agent class (`class
+Helper(LlmAgent)`, its base imported from `google.adk`, or a class deriving
+from that one) is therefore a named limit where it is used: on the module that
+defines it when that module names it again — a call, `functools.partial`, any
+other reference, or a decorator that could build it — and that module's tool
+surface is then not reported as enumerated to `scan` either; and on every other
+module in the scope that imports it, as for an SDK subclass. A subclass nothing
+uses, even one another unused subclass derives from, is not a limit. `scan`
+reads one declared module, so a subclass used only in another module does not
+affect it.
+
+The census of copies, changes and subclasses runs only when some side's
+discovery found an OpenAI Agents SDK or Google ADK source. Without one, no
+agent is read on either side, and the result stays `not_established` rather
+than turning `partial` over the repository's own `.tools` (a report builder's
+`artifacts.tools.append(record)`). Every module is still parsed, and one that
+cannot be is still a gap.
+
+Not read at all: an `Agent` re-exported through a project module,
+`functools.partial(Agent, ...)`, or a subclass defined outside the scope.
+
 An agent one side observes is absent from the other only when that side's
 file no longer names it. If the file still assigns or imports the agent's name
-(`from factory import agent`), or passes it as `name=`, through a construction the reader does not support (an `Agent`
-subclass passing `tools` through `super().__init__`, a factory,
-`Agent[Context](...)`, `.clone()`), that side records a gap for the agent and
-its rows are `not_established`, never `removed` or `added`. An agent referenced
-only in another agent's `handoffs` is not an observed construction.
+(`from factory import agent`, `agent = build()`), or passes it as `name=`,
+through a construction the reader does not read (an `Agent` subclass, a
+`.clone()`), that side records a gap for the agent and its rows are
+`not_established`, never `removed` or `added`. A factory's own `return
+Agent(name="assistant", ...)` is read under that literal name in the module
+that builds it; it is a construction site of its own, not evidence about the
+name the factory's result is assigned to. An agent referenced only in another
+agent's `handoffs` is not an observed construction.
+
+Test files never establish the application. A file under a `test` or `tests`
+directory, a `test_*.py` or `*_test.py` module, `conftest.py`, `test.py` or
+`tests.py` — matched case-sensitively and relative to the selected scope, the
+convention discovery uses — is listed in each side's `excluded_tests`, printed
+in the text output, and not read as an agent source: a test double's agent is
+not the application's agent, so it cannot make a scope count as established,
+and a test file's own defects (a tool defined twice, an unsupported framework,
+a parse failure) are not the application's gaps. A product module that only
+looks like a test is excluded too, which the printed list makes visible; the
+import resolver still follows a tool the application imports from such a file.
+
+A file that defines one tool name twice is a named limit on that name in that
+file: no agent binds either definition, so every binding of the name there is
+`not_established`, while the file's other tools, and every other file in the
+scope, are still compared.
 
 Framework identity follows the import, not the spelling. `Agent` and
 `function_tool` are the OpenAI Agents SDK's only when imported from the absolute
