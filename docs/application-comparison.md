@@ -139,12 +139,14 @@ An absent side names the missing scope and suggests `--base-scope`/`--scope`
 for relocation. If neither selected directory exists, the command refuses with
 exit 2. A removal describes the selected source path, not the entire repository.
 
-`--json` emits `application_comparison_schema_version: "0.2"`, engine identity,
+`--json` emits `application_comparison_schema_version: "0.3"`, engine identity,
 requested and compared refs/tree IDs, per-side scope/coverage, rows, source
 correspondence, `scope_selection`, `comparisons` when a derived change spans
 more than one application, and a deterministic `comparison_id`. Version 0.2 adds
 `reach`, `effect_evidence` and `construction_sites` to a row's sides (see
-[What a bound tool reaches](#what-a-bound-tool-reaches)). This is a separate advisory
+[What a bound tool reaches](#what-a-bound-tool-reaches)); version 0.3 adds
+`bound_when` (see [Tools lists built by an expression](#tools-lists-built-by-an-expression)).
+This is a separate advisory
 artifact from the existing host diff JSON and verifier receipt.
 
 - `compared`: the selected supported source observations were compared. An
@@ -351,7 +353,8 @@ the agent's function — `tools = [a, b]` with `tools.append(c)`,
 `.extend([...])`, `.insert(i, c)` or `tools += [...]` — is read member by
 member up to the statement that builds the agent, which copies it; an addition
 under a condition or in a loop before it is named on the agent, never read as
-bound, and any other use of the list keeps it a dynamic tools expression.
+bound. A list used any other way is read as
+[a tools list built by an expression](#tools-lists-built-by-an-expression) is.
 
 The boundary is narrow. Only regular `.py` files inside the selected scope are
 read, parsed with `ast` and never imported or run. Symbolic links are not
@@ -473,7 +476,8 @@ wildcard import could bind the name. `x = FunctionTool(func=x)` right after
 An OpenAI Agents SDK `tools=NAME` or `handoffs=NAME` is read through the scope
 that binds `NAME` where the agent is constructed: a builder's own list, a class
 body's own list, or the module's. It is read only when that scope binds it
-once, to a literal list, and every use of that binding in the file only reads
+once, unconditionally, to a list [the expression reader](#tools-lists-built-by-an-expression)
+reads, and every use of that binding in the module that binds it only reads
 it: iterated, indexed, compared, tested, formatted, spread (`[*TOOLS, x]`),
 handed to a read-only builtin, a standard-library reader (`json.dumps`) or a
 logger's method — each proven by its binding, so a `print` imported from the
@@ -482,8 +486,8 @@ own `tools=`, or to a function whose every use of that parameter is such a
 read. A list method, `+=`, a `global` or `nonlocal` rebinding, a subscript
 store, a second name (also through `x or y`), a tuple, a return, `*args`, or anything
 in the module that reaches its names without spelling them (`globals()`,
-`vars()`, `sys.modules`, importing the module by `__name__`) makes it a dynamic
-tools expression. The names in a module-level list are read at module level, whatever
+`vars()`, `sys.modules`, importing the module by `__name__`) leaves it unread,
+named with why. The names in a module-level list are read at module level, whatever
 the function that builds the agent imports.
 
 A reference that does not reach one definition stays an unresolved tool, named
@@ -505,6 +509,83 @@ A row compares a definition's signature and implementation digest, not the
 module it lives in: moving a function is not a change. So retargeting a binding
 between two functions whose definitions are the same text in different modules
 shows no row, even when the modules differ in what the function body refers to.
+
+## Tools lists built by an expression
+
+An agent's tools are often not written out in its construction:
+`tools=[*FINANCE_TOOLS, *([prepare_handoff] if want_handoff else [])]`,
+`tools=base_tools + (extra_tools or [])`, or a filter over another module's
+list. An OpenAI Agents SDK or Google ADK agent's `tools=`, an SDK agent's
+`handoffs=` and an ADK agent's `sub_agents=` are read member by member when
+built from (#909):
+
+- a list or tuple literal, each `*` spread spliced in;
+- `a + b`;
+- `a if c else b` and `a or b`: every branch that can be the value, each
+  member *conditional* on the condition that selects it, or only the branch a
+  constant condition, or an operand known to be empty or not, selects;
+- a comprehension that keeps its elements (`[t for t in TOOLS if keep(t)]`)
+  and `filter(f, TOOLS)`: the members of `TOOLS`, each shown as held only
+  when the filter keeps it. The filter is not evaluated, so the list may hold
+  fewer;
+- `list(...)`, `tuple(...)` and `sorted(...)` of one of these;
+- a name bound once to one of these — in the builder or at module level, and
+  through a repository-local import to the module that builds the list, whose
+  members are then read by that module's names. A binding inside a branch, a
+  loop or an `except` is read only by code in the same block; one inside
+  `with` or a `try` body is read as unconditional.
+
+A name is looked up where Python evaluates it: a default, decorator or
+annotation in the scope around its definition, a comprehension's first
+iterable around the comprehension. It is read only while nothing can change
+the list after it is built: no use in its own module but a read, by the rule
+for `tools=NAME` above; no change through an agent built with it
+(`helper.tools.append(x)`); no wildcard import after it; and no change in a
+module the import passes through or a package above the list's module, which
+run first. A change made from a module the import never passes through is not
+looked for. Anything else is named where it is, on the agent it belongs to,
+with why — a call (`get_tools()`), a parameter of the builder (its value comes
+from a caller), `self.tools`, a comprehension that builds new elements, a name
+bound twice or changed in place, nesting deeper than 16 levels, or more than
+1,000 members:
+
+```text
+OpenAI Agents SDK agent 'finance' at agent.py:4 has a tools list it reads only in part;
+its binding graph is incomplete. Not read: a call to `plugin_tools`, whose result is not
+read (agent.py:4).
+```
+
+The agent stays incomplete, so the answer is never `compared`, but the members
+that were read are still compared: a tool both sides bind keeps its `changed`
+row, and nothing a part not read holds is reported as removed. A member another
+module's list names is read by that module's names, and never bound by its
+spelling alone: an unresolved one is a named limit, and a handoff spelled like
+an agent this module builds is not taken for that agent. Nothing is imported or
+run. A Google ADK `tools=` or `sub_agents=` list that came through a name, or
+from another module, is not counted by `scan` as a proven surface, because
+another module could change it; a literal spread into a literal is.
+
+A member held only under a condition carries it on its row's side as
+`bound_when`, one entry per way it gets in, each built from the conditions'
+source text (`` `wanted` ``, `` not `wanted` ``, `` `extra` is empty ``,
+`` the filter `keep(t)` keeps it ``, joined by `and`):
+
+```text
+ADDED  finance → prepare_finance_handoff
+  before: no observed binding
+  after: prepare_finance_handoff(note) at app/Agent/financeAgent.py:100
+    bound only when `want_handoff_tool`
+```
+
+A conditional member is never shown as unconditional, and a tool the list also
+holds unconditionally has no `bound_when`. A condition is compared whole, never
+shortened. When only the condition changed (`if handoffs` → `if
+want_handoff_tool`, or a conditional member made unconditional), the row is
+`changed`, and its `why` names both conditions: they are read, never evaluated,
+so whether the agent now holds the tool more or less often is not established.
+When a part of the agent's list was not read, or the agent is constructed more
+than once differently, the row is `not_established` instead: the unread part
+may hold the tool another way.
 
 ## What a bound tool reaches
 
